@@ -1,0 +1,102 @@
+- name: Install Kubernetes on Debian and CentOS
+  hosts: all
+  become: true
+  vars:
+    k8s_version: "1.22.0-00"  # Change this to the desired Kubernetes version
+
+  tasks:
+    # Update package cache
+    - name: Update package cache
+      package:
+        name: "*"
+        state: latest
+      become: true
+
+    # Install necessary packages for Debian
+    - name: Install necessary packages on Debian
+      package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - software-properties-common
+        - gnupg2
+        - lsb-release
+        - iptables-persistent  # Required for Kubernetes networking
+      when: ansible_os_family == 'Debian'
+
+    # Add Kubernetes APT repository key for Debian
+    - name: Add Kubernetes APT repository key for Debian
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    # Add Kubernetes APT repository for Debian
+    - name: Add Kubernetes APT repository for Debian
+      apt_repository:
+        repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    # Install Kubernetes packages for Debian
+    - name: Install Kubernetes packages on Debian
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - kubelet={{ k8s_version }}
+        - kubeadm={{ k8s_version }}
+        - kubectl={{ k8s_version }}
+      when: ansible_os_family == 'Debian'
+
+    # Disable swap
+    - name: Disable swap
+      command: swapoff -a
+      when: ansible_swaptotal_mb > 0
+
+    # Set SELinux in permissive mode for CentOS
+    - name: Set SELinux in permissive mode (CentOS)
+      selinux:
+        policy: targeted
+        state: permissive
+      when: ansible_os_family == 'RedHat'
+
+    # Start and enable kubelet service
+    - name: Start and enable kubelet service
+      service:
+        name: kubelet
+        state: started
+        enabled: yes
+
+    # Initialize Kubernetes cluster on Debian
+    - name: Initialize Kubernetes cluster on Debian
+      command: kubeadm init --kubernetes-version={{ k8s_version }}
+      register: kubeadm_output
+      when: ansible_os_family == 'Debian'
+
+    # Copy kubeadm join command to a file for joining worker nodes
+    - name: Copy kubeadm join command to a file
+      copy:
+        content: "{{ kubeadm_output.stdout_lines | select('search', 'kubeadm join') | first }}"
+        dest: /tmp/kubeadm_join_command
+      when: ansible_os_family == 'Debian'
+
+    # Set up kubectl for the regular user on Debian
+    - name: Set up kubectl for the regular user
+      become_user: "{{ ansible_ssh_user }}"
+      shell: "mkdir -p $HOME/.kube && sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config && sudo chown $(id -u):$(id -g) $HOME/.kube/config"
+      when: ansible_os_family == 'Debian'
+
+    # Install Calico network plugin (replace with your preferred CNI plugin) on Debian
+    - name: Install Calico network plugin on Debian
+      shell: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+      when: ansible_os_family == 'Debian'
+
+    # Print kubeadm join command
+    - name: Print kubeadm join command
+      debug:
+        var: kubeadm_output.stdout_lines | select('search', 'kubeadm join') | first
+      when: ansible_os_family == 'Debian'
